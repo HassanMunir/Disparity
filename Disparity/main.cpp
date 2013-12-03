@@ -3,6 +3,7 @@
 #include "opencv2\highgui\highgui.hpp"
 #include "opencv2\imgproc\imgproc.hpp"
 #include "opencv2\contrib\contrib.hpp"
+#include "Intrin.h"
 
 #include <Windows.h>
 
@@ -11,10 +12,10 @@ using namespace std;
 
 double NccCoreCalculation(Mat &regionLeft, Mat &regionRight, double d)
 {
-	unsigned short numerator = 0;
+	double numerator = 0;
 	double denominator = 0.0;
-	unsigned short denominatorRight = 0;
-	unsigned short denominatorLeft = 0;
+	double denominatorRight = 0;
+	double denominatorLeft = 0;
 
 	uchar *r, *l;
 	for (int i = 0; i < regionLeft.rows; i++)
@@ -23,9 +24,11 @@ double NccCoreCalculation(Mat &regionLeft, Mat &regionRight, double d)
 		r = regionRight.ptr<uchar>(i);
 		for (int j = 0; j < regionLeft.cols; j++)
 		{
+			
+			//numerator += __emul(r[j], l[j]);
 			numerator += r[j] * l[j];
-			denominatorLeft += (l[j] ^ 2);
-			denominatorRight += (r[j] ^ 2);
+			denominatorLeft += l[j] * l[j];
+			denominatorRight += r[j] *r[j];
 		}
 	}
 	denominator = sqrt(denominatorLeft * denominatorRight);
@@ -55,7 +58,7 @@ vector<int> GetUniqueAndValidDisparities(vector<int> disparitiesToSearch, int di
 
 }
 
-int GetDisparity(vector<int> disparitiesToSearch,int jWinStr,
+int GetDisparity(int disparitiesToSearch[], int numDisp, int jWinStr,
 	int iWinStr, int winx,	int winy, Mat &image,Mat &regionTemplate)
 {
 	//Returns the disparity of a region
@@ -65,7 +68,7 @@ int GetDisparity(vector<int> disparitiesToSearch,int jWinStr,
 	double ncc = 0.0;
 	double previousCorrelation = 0.0;
 	int bestMatchSoFar = 0;
-	for (int i = 0; i < disparitiesToSearch.size(); i++)
+	for (int i = 0; i < numDisp; i++)
 	{
 		regionToMatch = Rect(jWinStr + disparitiesToSearch[i], iWinStr, winx, winy);
 		regionToMatchMat = image(regionToMatch);
@@ -80,7 +83,7 @@ int GetDisparity(vector<int> disparitiesToSearch,int jWinStr,
 }
 
 
-Mat NCCSR(Mat imL, Mat imR, int windowSize, int dispMin, int dispMax)
+Mat NCCSR(Mat imL, Mat imR, int windowSize, int dispMin, int dispMax, int disparitiesToSearch[])
 {
 	// pad the left and right images
 	copyMakeBorder(imL, imL, 0, 0, dispMax, dispMax,BORDER_CONSTANT, Scalar(0));
@@ -94,7 +97,7 @@ Mat NCCSR(Mat imL, Mat imR, int windowSize, int dispMin, int dispMax)
 
 	int bottomLine = nrLeft - winy;
 	int searchRange = 3;
-	int searchWidth = round(searchRange * 0.5);
+	int searchWidth = (int) round(searchRange * 0.5);
 
 	Mat NREDCRef = Mat::ones(3, ncLeft, imL.type());
 
@@ -118,36 +121,38 @@ Mat NCCSR(Mat imL, Mat imR, int windowSize, int dispMin, int dispMax)
 			Rect regionRight = Rect(jWinStr, iWinStr, winx, winy);
 			Mat regionRightMat = imR(regionRight);
 
-			vector<int> disparitiesToSearch;
 
 			if (i == bottomLine)
 			{
-				for (int d = dispMin; d <= dispMax; d++)
-					disparitiesToSearch.push_back(d);
+				dispMapRowPointer[j] = GetDisparity(disparitiesToSearch, dispMax,
+					jWinStr, iWinStr, winx, winy, imL, regionRightMat);
 			}
 			else 
 			{
 				/*for (int d = dispMin; d <= dispMax; d++)
 					disparitiesToSearch.push_back(d);*/
 				
+				int disparitiesToSearch[9];
 
-				for (int k = 0; k < NREDCRef.rows; k++)
-				{
-					uchar disparitiesToSearch[9];
-					
-					uchar val = NREDCRef.at<uchar>(Point(j, k));
-					uchar val1 = NREDCRef.at<uchar>(Point(j - 1,k));
-					uchar val2 = NREDCRef.at<uchar>(Point( j + 1,k));
+				uchar *NREDCRefPointer = NREDCRef.ptr<uchar>(0);
+				disparitiesToSearch[0] = NREDCRefPointer[j];
+				disparitiesToSearch[1] = NREDCRefPointer[j - 1];
+				disparitiesToSearch[2] = NREDCRefPointer[j + 1];
 
-					disparitiesToSearch.push_back(val);
-					disparitiesToSearch.push_back(val1);
-					disparitiesToSearch.push_back(val2);
-				}
+				NREDCRefPointer = NREDCRef.ptr<uchar>(1);
+				disparitiesToSearch[3] = NREDCRefPointer[j];
+				disparitiesToSearch[4] = NREDCRefPointer[j - 1];
+				disparitiesToSearch[5] = NREDCRefPointer[j + 1];
+
+				NREDCRefPointer = NREDCRef.ptr<uchar>(2);
+				disparitiesToSearch[6] = NREDCRefPointer[j];
+				disparitiesToSearch[7] = NREDCRefPointer[j - 1];
+				disparitiesToSearch[8] = NREDCRefPointer[j + 1];
+
+				dispMapRowPointer[j] = GetDisparity(disparitiesToSearch, 9,
+					jWinStr, iWinStr, winx, winy, imL, regionRightMat);
 				//disparitiesToSearch = GetUniqueAndValidDisparities(disparitiesToSearch,dispMax);
 			}
-
-			dispMapRowPointer[j] = GetDisparity(disparitiesToSearch,
-				jWinStr, iWinStr, winx, winy, imL, regionRightMat);
 		}
 
 		dispMap.row(i).copyTo(NREDCRef.row(1));
@@ -281,7 +286,7 @@ void ProcessFolder(string inputFolder, string outputFolder)
 			return;
 		}
 
-		double startTime = getTickCount();
+		int64 startTime = getTickCount();
 
 		//Mat dispMap = NCCSR(left, right, 11, 0, 100);
 		Mat dispMap = NCC(left, right, 11, 100);
@@ -309,18 +314,28 @@ double GetAverageImageProcessingTime(Mat left, Mat right, int numIterations)
 
 	double totalTime = 0.0;
 	
+	int dispMax = 100;
+
+	int disparitiesToSearch[100];
+
+	for (int d = 0; d < dispMax; d++)
+		disparitiesToSearch[d] = d;
 
 
 	for (int i = 0; i < numIterations; i++){
-		double startTime = getTickCount();
+		int64 startTime = getTickCount();
 
-		Mat dispMap = NCCSR(left, right, 11, 0, 100);
+		Mat dispMap = NCCSR(left, right, 11, 0, dispMax, disparitiesToSearch);
 		
 		double iterationTime = (getTickCount() - startTime) / getTickFrequency();
 
 		//cout << "Iteration #  " << i + 1 << " in " << iterationTime << " s" << endl;
 
 		totalTime += iterationTime;
+		
+		//PrepareMapForDisplay(dispMap);
+		//imshow("dispMap", dispMap);
+		//waitKey(0);
 	}
 
 	double timeTaken = totalTime / numIterations;
@@ -337,7 +352,7 @@ void WaitKey()
 
 int main()
 {
-	int iterations = 2;
+	int iterations = 5;
 
 	Mat left = imread("left1.jpg", CV_LOAD_IMAGE_GRAYSCALE);
 	Mat right = imread("right1.jpg", CV_LOAD_IMAGE_GRAYSCALE);
@@ -346,20 +361,20 @@ int main()
 	double time = GetAverageImageProcessingTime(left, right, iterations);
 	cout << "Average time of:  " << time << "s over " << iterations << " iterations" << endl;
 	
-	left = imread("left2.png", CV_LOAD_IMAGE_GRAYSCALE);
-	right = imread("right2.png", CV_LOAD_IMAGE_GRAYSCALE);
+	//left = imread("left2.png", CV_LOAD_IMAGE_GRAYSCALE);
+	//right = imread("right2.png", CV_LOAD_IMAGE_GRAYSCALE);
 
 
-	time = GetAverageImageProcessingTime(left, right, iterations);
-	cout << "Average time of:  " << time << "s over " << iterations << " iterations" << endl;
+	//time = GetAverageImageProcessingTime(left, right, iterations);
+	//cout << "Average time of:  " << time << "s over " << iterations << " iterations" << endl;
 
 
-	left = imread("left3.png", CV_LOAD_IMAGE_GRAYSCALE);
-	right = imread("right3.png", CV_LOAD_IMAGE_GRAYSCALE);
+	//left = imread("left3.png", CV_LOAD_IMAGE_GRAYSCALE);
+	//right = imread("right3.png", CV_LOAD_IMAGE_GRAYSCALE);
 
 
-	time = GetAverageImageProcessingTime(left, right, iterations);
-	cout << "Average time of:  " << time << "s over " << iterations << " iterations" << endl;
+	//time = GetAverageImageProcessingTime(left, right, iterations);
+	//cout << "Average time of:  " << time << "s over " << iterations << " iterations" << endl;
 
 	WaitKey();
 	return 0;
